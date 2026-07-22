@@ -8,7 +8,7 @@ export async function apiRoutes(fastify, options) {
   // -------------------------------------------------------------
   // DASHBOARD ROUTE: Generate API Key for a Project
   // -------------------------------------------------------------
-  fastify.post('/api/projects/:projectId/keys', async (request, reply) => {
+  fastify.post('/api/Projects/:projectId/keys', async (request, reply) => {
     const { projectId } = request.params;
     const { name } = request.body || {};
 
