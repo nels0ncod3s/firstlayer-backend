@@ -26,3 +26,46 @@ export async function verifyApiKey(request, reply) {
   // Attach project info directly to the request object for downstream routes
   request.projectId = data.project_id;
 }
+
+// -------------------------------------------------------------
+// DASHBOARD AUTH: verifies the logged-in Supabase user (the access
+// token SvelteKit forwards from the dashboard session) actually
+// owns the :projectId in the URL. Without this, anyone who knows
+// (or guesses) a project id could mint/list/revoke its API keys.
+// -------------------------------------------------------------
+export async function verifyDashboardUser(request, reply) {
+  const authHeader = request.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return reply.status(401).send({ error: 'Missing Authorization bearer token' });
+  }
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser(token);
+
+  if (userError || !user) {
+    return reply.status(401).send({ error: 'Invalid or expired session' });
+  }
+
+  const { projectId } = request.params;
+
+  const { data: project, error: projectError } = await supabase
+    .from('Projects')
+    .select('id, user_id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  // Same "don't leak existence" behavior as the dashboard's own
+  // dashboard/[project]/+layout.server.js: wrong owner and
+  // nonexistent id both come back as 404, not 403.
+  if (projectError || !project) {
+    return reply.status(404).send({ error: 'Project not found' });
+  }
+
+  request.userId = user.id;
+  request.project = project;
+}
