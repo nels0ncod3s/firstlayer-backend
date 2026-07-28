@@ -1,7 +1,7 @@
 // routes.js
 import { supabase } from './db.js';
 import { generateApiKey, hashApiKey, hashPassword } from './crypto.js';
-import { verifyApiKey, verifyDashboardUser } from './middleware/auth.js';
+import { verifyApiKey, verifyDashboardUser, verifyDashboardSession } from './middleware/auth.js';
 
 export async function apiRoutes(fastify, options) {
   // ===============================================================
@@ -115,6 +115,36 @@ export async function apiRoutes(fastify, options) {
       }
 
       return reply.send({ message: 'Project dependents cleaned up' });
+    }
+  );
+
+  // Key/user counts for every project the caller owns, in one query — the
+  // project grid's card metadata needs this, and doing it per-project
+  // would mean one round trip per card. Same reason the dashboard's own
+  // Supabase client can't do this directly: it has no access to api_keys
+  // or project_users under RLS, only the service-role client here does.
+  fastify.get(
+    '/api/projects/counts',
+    { preHandler: [verifyDashboardSession] },
+    async (request, reply) => {
+      const { data, error } = await supabase
+        .from('Projects')
+        .select('id, api_keys(count), project_users(count)')
+        .eq('user_id', request.userId);
+
+      if (error) {
+        return reply.status(500).send({ error: error.message });
+      }
+
+      const counts = {};
+      for (const row of data) {
+        counts[row.id] = {
+          keyCount: row.api_keys?.[0]?.count ?? 0,
+          userCount: row.project_users?.[0]?.count ?? 0,
+        };
+      }
+
+      return reply.send({ counts });
     }
   );
 

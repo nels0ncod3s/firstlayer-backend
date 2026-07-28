@@ -69,3 +69,27 @@ export async function verifyDashboardUser(request, reply) {
   request.userId = user.id;
   request.project = project;
 }
+
+// Same bearer-token check as verifyDashboardUser, but for routes that span
+// *all* of the caller's projects (e.g. batch counts for the grid) rather
+// than one :projectId from the URL — there's no single project to check
+// ownership of here, so this stops at "is this a valid session."
+export async function verifyDashboardSession(request, reply) {
+  const authHeader = request.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return reply.status(401).send({ error: 'Missing Authorization bearer token' });
+  }
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser(token);
+
+  if (userError || !user) {
+    return reply.status(401).send({ error: 'Invalid or expired session' });
+  }
+
+  request.userId = user.id;
+}
