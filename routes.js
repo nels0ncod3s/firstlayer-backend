@@ -1,7 +1,7 @@
 // routes.js
 import { supabase } from './db.js';
-import { generateApiKey, hashApiKey, hashPassword } from './crypto.js';
-import { verifyApiKey, verifyDashboardUser, verifyDashboardSession } from './middleware/auth.js';
+import { generateApiKey, hashApiKey, hashPassword, verifyPassword, generateSessionToken, hashSessionToken } from './crypto.js';
+import { verifyApiKey, verifyDashboardUser, verifyDashboardSession, verifySessionToken } from './middleware/auth.js';
 
 export async function apiRoutes(fastify, options) {
   // ===============================================================
@@ -374,5 +374,88 @@ export async function apiRoutes(fastify, options) {
     }
 
     return reply.send({ message: 'User deleted successfully', id: data.id });
+  });
+
+  // Login — verifies email/password, issues an opaque session token.
+  // Same error for "no such user" and "wrong password" on purpose:
+  // returning different errors is a user-enumeration vector.
+  fastify.post('/v1/auth/login', { preHandler: [verifyApiKey] }, async (request, reply) => {
+    const { email, password } = request.body || {};
+    const projectId = request.projectId;
+
+    if (!email || !password) {
+      return reply.status(400).send({ error: 'Email and password are required' });
+    }
+
+    const { data: user, error } = await supabase
+      .from('project_users')
+      .select('id, email, password_hash, is_blocked, created_at')
+      .eq('project_id', projectId)
+      .eq('email', email.toLowerCase())
+      .single();
+
+    if (error || !user || !verifyPassword(password, user.password_hash)) {
+      return reply.status(401).send({ error: 'Invalid email or password' });
+    }
+
+    if (user.is_blocked) {
+      return reply.status(403).send({ error: 'This account has been blocked' });
+    }
+
+    const rawToken = generateSessionToken();
+    const tokenHash = hashSessionToken(rawToken);
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days
+
+    const { error: sessionError } = await supabase.from('sessions').insert({
+      project_id: projectId,
+      user_id: user.id,
+      token_hash: tokenHash,
+      expires_at: expiresAt,
+    });
+
+    if (sessionError) {
+      return reply.status(500).send({ error: sessionError.message });
+    }
+
+    return reply.send({
+      message: 'Login successful',
+      token: rawToken, // returned once — client stores this, sends back as x-session-token
+      expiresAt,
+      user: { id: user.id, email: user.email, created_at: user.created_at },
+    });
+  });
+
+  // Logout — revokes the session token so it can no longer authenticate.
+  fastify.post('/v1/auth/logout', { preHandler: [verifyApiKey, verifySessionToken] }, async (request, reply) => {
+    const tokenHash = hashSessionToken(request.headers['x-session-token']);
+
+    const { error } = await supabase
+      .from('sessions')
+      .delete()
+      .eq('token_hash', tokenHash)
+      .eq('project_id', request.projectId);
+
+    if (error) {
+      return reply.status(500).send({ error: error.message });
+    }
+
+    return reply.send({ message: 'Logged out' });
+  });
+
+  // Returns the currently-authenticated end-user. This is what a client
+  // app calls on page load to check "am I still logged in", and it's
+  // the round-trip proof that a session token actually works.
+  fastify.get('/v1/me', { preHandler: [verifyApiKey, verifySessionToken] }, async (request, reply) => {
+    const { data, error } = await supabase
+      .from('project_users')
+      .select('id, email, created_at')
+      .eq('id', request.endUserId)
+      .single();
+
+    if (error || !data) {
+      return reply.status(404).send({ error: 'User not found' });
+    }
+
+    return reply.send({ user: data });
   });
 }

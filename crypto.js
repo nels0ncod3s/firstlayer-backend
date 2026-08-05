@@ -35,3 +35,13 @@ export function verifyPassword(password, stored) {
   if (candidate.length !== hashBuffer.length) return false;
   return crypto.timingSafeEqual(candidate, hashBuffer);
 }
+
+// Same idea as API keys: random opaque token, only the hash is ever
+// stored. This is what /v1/auth/login issues to end-users.
+export function generateSessionToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+export function hashSessionToken(rawToken) {
+  return crypto.createHash('sha256').update(rawToken).digest('hex');
+}
